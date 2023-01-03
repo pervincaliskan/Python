@@ -14,3 +14,4 @@ liste_yedek = liste.copy()
 
 liste.extend(["a","b",10])
 liste
+liste
