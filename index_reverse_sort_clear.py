@@ -18,7 +18,7 @@ liste
 
 #sort()
 
-liste = [10,40,5,90]
+liste = [10,40,5,80]
 liste.sort()
 liste
 
