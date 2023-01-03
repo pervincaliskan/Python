@@ -27,6 +27,7 @@ maaslar[1]
 maaslar[2]
 maaslar[3]
 maaslar[4]
+maaslar[0]
 
 for maas in maaslar:
     print(maas)
