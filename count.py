@@ -13,3 +13,4 @@ liste = ["ali","veli","isik","ali","veli"]
 liste.count("ali")
 liste.count("veli")
 liste.count("isik")
+
