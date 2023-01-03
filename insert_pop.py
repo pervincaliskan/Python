@@ -19,7 +19,7 @@ liste = ["ali","veli","isik"]
 
 liste[0] = "ayse"
 
-liste
+
 
 liste.insert(0,"ayse")
 liste
