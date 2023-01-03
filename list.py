@@ -13,7 +13,7 @@ Created on Tue Jan  3 16:09:23 2023
 notlar = [90,80,70,50]
 type(notlar)
 
-liste = ["a",19.3,90]
+liste = ["a",19.4,90]
 list_genis = ["a",19.3,90, notlar]
 
 len(list_genis)
