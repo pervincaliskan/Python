@@ -9,7 +9,7 @@ Created on Tue Jan  3 18:10:04 2023
 #Local ve Global Degiskenler
 
 x = 10
-y = 20
+y = 25
 
 def carpma_yap(x = 2,y = 1):
     return x*y
