@@ -11,6 +11,7 @@ Created on Tue Jan  3 16:32:53 2023
 
 s = set()
 s
+s
 
 l = [1,"a","ali", 123]
 s = set(l)
