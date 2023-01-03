@@ -12,6 +12,7 @@ liste = ["ali","veli","isik"]
 dir(liste)
 
 liste
+liste
 
 #append & remove
 
