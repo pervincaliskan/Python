@@ -16,4 +16,4 @@ if gelir > sinir:
 elif gelir < sinir:
     print("Uyari! Cok dusuk gelir:" + str(gelir))
 else:
-    print("Takibe devam")
+    print("Takibe devam...")
