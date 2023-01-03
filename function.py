@@ -13,7 +13,7 @@ Created on Tue Jan  3 17:39:35 2023
 def kare_al(x):
     print(x**2)
     
-kare_al(5)    
+kare_al(6)    
 
 #Bilgi Notuyla Cikti Uretmek
 
