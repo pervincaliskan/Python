@@ -17,7 +17,6 @@ sozluk
 
 len(sozluk)
 
-
 sozluk = {"REG" : 10,
           "LOJ" : 20,
           "CART" : 30}
