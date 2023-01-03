@@ -28,3 +28,4 @@ s.remove("ali")
 s
 
 s.discard("ali")
+s
