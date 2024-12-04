@@ -18,10 +18,60 @@ from sklearn.ensemble import (
     VotingClassifier
 )
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.decomposition import PCA
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
 import rasterio
+
+
+class RotationForestClassifier:
+    def __init__(self, n_estimators=10, random_state=None):
+        self.n_estimators = n_estimators
+        self.random_state = random_state
+        np.random.seed(random_state)
+        self.trees = []
+        self.pcas = []
+
+    def fit(self, X, y):
+        # Her bir ağaç için
+        for _ in range(self.n_estimators):
+            # 1. Bootstrap örnekleme
+            n_samples = X.shape[0]
+            bootstrap_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+            X_bootstrap = X[bootstrap_indices]
+            y_bootstrap = y[bootstrap_indices]
+
+            # 2. PCA uygula
+            pca = PCA(random_state=self.random_state)
+            X_transformed = pca.fit_transform(X_bootstrap)
+
+            # 3. Ağaç oluştur ve eğit
+            tree = DecisionTreeClassifier(random_state=self.random_state)
+            tree.fit(X_transformed, y_bootstrap)
+
+            # 4. Modeli kaydet
+            self.trees.append(tree)
+            self.pcas.append(pca)
+
+        return self
+
+    def predict(self, X):
+        # Her ağaçtan tahmin al
+        predictions = np.zeros((X.shape[0], self.n_estimators))
+
+        for idx, (tree, pca) in enumerate(zip(self.trees, self.pcas)):
+            # Veriyi dönüştür
+            X_transformed = pca.transform(X)
+            # Tahmin yap
+            predictions[:, idx] = tree.predict(X_transformed)
+
+        # Çoğunluk oylaması
+        return np.apply_along_axis(
+            lambda x: np.bincount(x.astype(int)).argmax(),
+            axis=1,
+            arr=predictions
+        )
 
 
 class SARImageClassifier:
@@ -92,7 +142,7 @@ class SARImageClassifier:
         return X, y
 
     def extract_features(self, X):
-        """Geliştirilmiş özellik çıkarımı"""
+        """SAR görüntülerinden özellik çıkarımı"""
         if len(X.shape) == 3:
             X = np.expand_dims(X, axis=-1)
 
@@ -119,7 +169,7 @@ class SARImageClassifier:
         return features
 
     def build_models(self, y_train):
-        """Geliştirilmiş model oluşturma"""
+        """Tüm ensemble modellerini oluştur"""
         # Random Forest
         rf_params = {
             'n_estimators': [50, 100, 200],
@@ -134,7 +184,7 @@ class SARImageClassifier:
             n_jobs=-1
         )
 
-        # Bagging - daha basit parametreler ile
+        # Bagging
         bagging_params = {
             'n_estimators': [10, 20],
             'max_samples': [0.5, 1.0]
@@ -149,9 +199,13 @@ class SARImageClassifier:
             n_jobs=-1
         )
 
+        # Rotation Forest - doğrudan kullan
+        rotation_model = RotationForestClassifier(n_estimators=20, random_state=42)
+
         # Modelleri dictionary'e ekle
         self.models['random_forest'] = rf_model
         self.models['bagging'] = bagging_model
+        self.models['rotation_forest'] = rotation_model
 
         return self.models
 
@@ -168,7 +222,12 @@ class SARImageClassifier:
         for name, model in self.models.items():
             print(f"\n{name} eğitiliyor...")
             # Model eğitimi
-            model.fit(X_train_features, y_train)
+            if isinstance(model, GridSearchCV):
+                model.fit(X_train_features, y_train)
+                best_params = model.best_params_
+            else:
+                model.fit(X_train_features, y_train)
+                best_params = None
 
             # Tahminler
             y_pred = model.predict(X_test_features)
@@ -181,7 +240,7 @@ class SARImageClassifier:
             results[name] = {
                 'accuracy': accuracy,
                 'confusion_matrix': cm,
-                'best_params': model.best_params_ if hasattr(model, 'best_params_') else None
+                'best_params': best_params
             }
 
         return results
