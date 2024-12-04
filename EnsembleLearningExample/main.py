@@ -1,3 +1,4 @@
+
 import os
 import warnings
 from rasterio.errors import NotGeoreferencedWarning
@@ -87,7 +88,7 @@ class SARImageClassifier:
 
         images = []
         labels = []
-        all_means = []  # Önce tüm ortalama değerleri toplayalım
+        all_means = []
 
         # İlk geçiş - tüm ortalama değerleri topla
         img_files = [f for f in os.listdir(img_path) if f.endswith('.tif')]
@@ -246,24 +247,57 @@ class SARImageClassifier:
         return results
 
     def visualize_results(self, results, class_names):
-        """Tüm modellerin sonuçlarını görselleştir"""
+        """Tüm modellerin sonuçlarını karşılaştırmalı görselleştir"""
+        # Her model için confusion matrix
         for name, result in results.items():
+            # Yeni bir figure oluştur
             plt.figure(figsize=(10, 8))
-            sns.heatmap(result['confusion_matrix'],
-                        annot=True,
-                        fmt='d',
-                        cmap='Blues',
-                        xticklabels=class_names,
-                        yticklabels=class_names)
+
+            # Confusion matrix çiz
+            sns.heatmap(
+                result['confusion_matrix'],
+                annot=True,
+                fmt='d',
+                cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names
+            )
+
             plt.title(f'{name} - SAR Görüntü Sınıflandırma Confusion Matrix')
             plt.xlabel('Tahmin Edilen Sınıf')
             plt.ylabel('Gerçek Sınıf')
+            plt.tight_layout()
             plt.show()
+            plt.close()  # Figure'ı kapat
 
+            # Sonuçları yazdır
             print(f"\n{name} Sonuçları:")
             print(f"Doğruluk: {result['accuracy']:.4f}")
             if result['best_params']:
                 print("En iyi parametreler:", result['best_params'])
+
+        # Karşılaştırma grafiği için yeni bir figure
+        plt.figure(figsize=(10, 6))
+
+        # Doğruluk değerlerini al
+        accuracies = {name: result['accuracy'] for name, result in results.items()}
+
+        # Bar plot çiz
+        bars = plt.bar(accuracies.keys(), accuracies.values())
+        plt.title('Model Doğruluk Karşılaştırması')
+        plt.xlabel('Model')
+        plt.ylabel('Doğruluk')
+
+        # Bar değerlerini yaz
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width() / 2., height,
+                     f'{height:.4f}',
+                     ha='center', va='bottom')
+
+        plt.tight_layout()
+        plt.show()
+        plt.close()
 
 
 def main():
