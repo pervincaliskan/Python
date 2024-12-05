@@ -8,18 +8,19 @@ warnings.filterwarnings('ignore', category=NotGeoreferencedWarning)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.ensemble import (
     RandomForestClassifier,
     BaggingClassifier,
     AdaBoostClassifier,
-    GradientBoostingClassifier,
-    VotingClassifier
+    VotingClassifier,
+    StackingClassifier
 )
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
+from sklearn.metrics import accuracy_score, confusion_matrix
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -33,41 +34,59 @@ class RotationForestClassifier:
         np.random.seed(random_state)
         self.trees = []
         self.pcas = []
+        self.oob_score_ = 0  # OOB skoru için
 
-    def fit(self, X, y):
-        # Her bir ağaç için
-        for _ in range(self.n_estimators):
-            # 1. Bootstrap örnekleme
-            n_samples = X.shape[0]
-            bootstrap_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+    def fit(self, X, y, sample_weight=None):
+        n_samples = X.shape[0]
+        oob_predictions = np.zeros((n_samples, self.n_estimators))
+        n_times_used = np.zeros(n_samples)
+
+        for i in range(self.n_estimators):
+            # Bootstrap örnekleme
+            bootstrap_indices = np.random.choice(n_samples, size=int(0.67 * n_samples), replace=True)
+            oob_indices = list(set(range(n_samples)) - set(bootstrap_indices))
+
+            # InBag verilerini kullan
             X_bootstrap = X[bootstrap_indices]
             y_bootstrap = y[bootstrap_indices]
 
-            # 2. PCA uygula
+            # PCA uygula
             pca = PCA(random_state=self.random_state)
             X_transformed = pca.fit_transform(X_bootstrap)
 
-            # 3. Ağaç oluştur ve eğit
+            # Ağaç eğit
             tree = DecisionTreeClassifier(random_state=self.random_state)
-            tree.fit(X_transformed, y_bootstrap)
+            if sample_weight is not None:
+                tree.fit(X_transformed, y_bootstrap, sample_weight=sample_weight[bootstrap_indices])
+            else:
+                tree.fit(X_transformed, y_bootstrap)
 
-            # 4. Modeli kaydet
+            # OOB tahminleri
+            if len(oob_indices) > 0:
+                X_oob = X[oob_indices]
+                X_oob_transformed = pca.transform(X_oob)
+                oob_predictions[oob_indices, i] = tree.predict(X_oob_transformed)
+                n_times_used[oob_indices] += 1
+
             self.trees.append(tree)
             self.pcas.append(pca)
 
+        # OOB skoru hesapla
+        oob_predictions_mean = []
+        for i in range(n_samples):
+            if n_times_used[i] > 0:
+                predictions = oob_predictions[i, :int(n_times_used[i])]
+                oob_predictions_mean.append(np.bincount(predictions.astype(int)).argmax())
+
+        self.oob_score_ = accuracy_score(y[n_times_used > 0], oob_predictions_mean)
         return self
 
     def predict(self, X):
-        # Her ağaçtan tahmin al
         predictions = np.zeros((X.shape[0], self.n_estimators))
-
         for idx, (tree, pca) in enumerate(zip(self.trees, self.pcas)):
-            # Veriyi dönüştür
             X_transformed = pca.transform(X)
-            # Tahmin yap
             predictions[:, idx] = tree.predict(X_transformed)
 
-        # Çoğunluk oylaması
         return np.apply_along_axis(
             lambda x: np.bincount(x.astype(int)).argmax(),
             axis=1,
@@ -79,7 +98,7 @@ class SARImageClassifier:
     def __init__(self):
         self.models = {}
         self.scaler = StandardScaler()
-        self.image_size = (128, 128)
+        self.image_size = (64, 64)
 
     def load_and_preprocess(self, base_path):
         """Sentinel-1 SAR görüntülerini yükle ve ön işle"""
@@ -90,7 +109,6 @@ class SARImageClassifier:
         labels = []
         all_means = []
 
-        # İlk geçiş - tüm ortalama değerleri topla
         img_files = [f for f in os.listdir(img_path) if f.endswith('.tif')]
         for img_file in img_files:
             ann_filepath = os.path.join(ann_path, img_file)
@@ -99,11 +117,9 @@ class SARImageClassifier:
                     label = src.read(1)
                     all_means.append(np.mean(label))
 
-        # Kuantilleri hesapla
         q33, q66 = np.percentile(all_means, [33, 66])
         print(f"Eşik değerleri - Alt: {q33:.3f}, Üst: {q66:.3f}")
 
-        # İkinci geçiş - görüntüleri işle ve etiketleri ata
         for img_file in img_files:
             img_filepath = os.path.join(img_path, img_file)
             ann_filepath = os.path.join(ann_path, img_file)
@@ -134,12 +150,6 @@ class SARImageClassifier:
         X = np.array(images)
         y = np.array(labels)
 
-        # Sınıf dağılımını göster
-        unique, counts = np.unique(y, return_counts=True)
-        print("\nSınıf dağılımı:")
-        for label, count in zip(unique, counts):
-            print(f"Sınıf {label}: {count} örnek")
-
         return X, y
 
     def extract_features(self, X):
@@ -149,15 +159,9 @@ class SARImageClassifier:
 
         feature_extractor = tf.keras.Sequential([
             tf.keras.layers.Conv2D(32, 3, activation='relu', input_shape=(*self.image_size, 1)),
-            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPooling2D(),
             tf.keras.layers.Conv2D(64, 3, activation='relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.MaxPooling2D(),
-            tf.keras.layers.Conv2D(128, 3, activation='relu'),
-            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.Dropout(0.5)
         ])
 
         feature_extractor.compile(
@@ -166,94 +170,116 @@ class SARImageClassifier:
             metrics=['accuracy']
         )
 
-        features = feature_extractor.predict(X, verbose=0)
+        features = feature_extractor.predict(X, batch_size=64, verbose=0)
         return features
 
-    def build_models(self, y_train):
+    def build_models(self, X, y):
         """Tüm ensemble modellerini oluştur"""
+        # Sınıf ağırlıklarını hesapla
+        sample_weights = compute_sample_weight(
+            class_weight='balanced',
+            y=y
+        )
+
         # Random Forest
-        rf_params = {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5],
-            'class_weight': ['balanced']
-        }
-        rf_model = GridSearchCV(
-            RandomForestClassifier(random_state=42),
-            rf_params,
-            cv=3,
-            n_jobs=-1
+        rf_model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=20,
+            class_weight='balanced',
+            oob_score=True,
+            random_state=42
         )
 
         # Bagging
-        bagging_params = {
-            'n_estimators': [10, 20],
-            'max_samples': [0.5, 1.0]
-        }
-        bagging_model = GridSearchCV(
-            BaggingClassifier(
-                estimator=DecisionTreeClassifier(random_state=42),
-                random_state=42
-            ),
-            bagging_params,
-            cv=3,
-            n_jobs=-1
+        bagging_model = BaggingClassifier(
+            estimator=DecisionTreeClassifier(class_weight='balanced'),
+            n_estimators=20,
+            max_samples=0.67,  # InBag oranı
+            oob_score=True,
+            random_state=42
         )
 
-        # Rotation Forest - doğrudan kullan
+        # Rotation Forest
         rotation_model = RotationForestClassifier(n_estimators=20, random_state=42)
+
+        # Voting Classifier
+        voting_model = VotingClassifier(
+            estimators=[
+                ('rf', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)),
+                ('bag', BaggingClassifier(n_estimators=20, random_state=42)),
+                ('ada', AdaBoostClassifier(n_estimators=50, random_state=42))
+            ],
+            voting='soft'
+        )
+
+        # Stacking Classifier
+        estimators = [
+            ('rf', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)),
+            ('bag', BaggingClassifier(n_estimators=20, random_state=42)),
+            ('ada', AdaBoostClassifier(n_estimators=50, random_state=42))
+        ]
+        stacking_model = StackingClassifier(
+            estimators=estimators,
+            final_estimator=RandomForestClassifier(n_estimators=100, random_state=42),
+            cv=5
+        )
 
         # Modelleri dictionary'e ekle
         self.models['random_forest'] = rf_model
         self.models['bagging'] = bagging_model
         self.models['rotation_forest'] = rotation_model
+        self.models['voting'] = voting_model
+        self.models['stacking'] = stacking_model
 
         return self.models
 
-    def train_and_evaluate(self, X_train, X_test, y_train, y_test):
+    def train_and_evaluate(self, X, y):
         """Tüm modelleri eğit ve değerlendir"""
         results = {}
-        X_train_features = self.extract_features(X_train)
-        X_test_features = self.extract_features(X_test)
+        features = self.extract_features(X)
 
-        # Modelleri oluştur
-        self.build_models(y_train)
+        # Veriyi InBag ve OOB olarak böl
+        n_samples = len(y)
+        inbag_indices = np.random.choice(n_samples, size=int(0.67 * n_samples), replace=False)
+        oob_indices = list(set(range(n_samples)) - set(inbag_indices))
 
-        # Her model için eğitim ve değerlendirme yap
+        X_inbag = features[inbag_indices]
+        y_inbag = y[inbag_indices]
+        X_oob = features[oob_indices]
+        y_oob = y[oob_indices]
+
+        # Sınıf ağırlıklarını hesapla
+        sample_weights = compute_sample_weight(
+            class_weight='balanced',
+            y=y_inbag
+        )
+
+        self.build_models(X_inbag, y_inbag)
+
         for name, model in self.models.items():
             print(f"\n{name} eğitiliyor...")
-            # Model eğitimi
-            if isinstance(model, GridSearchCV):
-                model.fit(X_train_features, y_train)
-                best_params = model.best_params_
-            else:
-                model.fit(X_train_features, y_train)
-                best_params = None
+            model.fit(X_inbag, y_inbag, sample_weight=sample_weights)
 
-            # Tahminler
-            y_pred = model.predict(X_test_features)
+            # OOB verileriyle değerlendir
+            y_pred = model.predict(X_oob)
+            accuracy = accuracy_score(y_oob, y_pred)
+            cm = confusion_matrix(y_oob, y_pred)
 
-            # Performans metrikleri
-            accuracy = np.mean(y_pred == y_test)
-            cm = tf.math.confusion_matrix(y_test, y_pred)
+            # OOB skoru
+            oob_score = model.oob_score_ if hasattr(model, 'oob_score_') else None
 
-            # Sonuçları kaydet
             results[name] = {
                 'accuracy': accuracy,
                 'confusion_matrix': cm,
-                'best_params': best_params
+                'oob_score': oob_score
             }
 
         return results
 
     def visualize_results(self, results, class_names):
-        """Tüm modellerin sonuçlarını karşılaştırmalı görselleştir"""
-        # Her model için confusion matrix
+        """Tüm modellerin sonuçlarını görselleştir"""
         for name, result in results.items():
-            # Yeni bir figure oluştur
             plt.figure(figsize=(10, 8))
-
-            # Confusion matrix çiz
             sns.heatmap(
                 result['confusion_matrix'],
                 annot=True,
@@ -262,33 +288,24 @@ class SARImageClassifier:
                 xticklabels=class_names,
                 yticklabels=class_names
             )
-
             plt.title(f'{name} - SAR Görüntü Sınıflandırma Confusion Matrix')
             plt.xlabel('Tahmin Edilen Sınıf')
             plt.ylabel('Gerçek Sınıf')
             plt.tight_layout()
             plt.show()
-            plt.close()  # Figure'ı kapat
 
-            # Sonuçları yazdır
             print(f"\n{name} Sonuçları:")
-            print(f"Doğruluk: {result['accuracy']:.4f}")
-            if result['best_params']:
-                print("En iyi parametreler:", result['best_params'])
+            print(f"Test Doğruluğu: {result['accuracy']:.4f}")
+            if result['oob_score'] is not None:
+                print(f"OOB Skoru: {result['oob_score']:.4f}")
 
-        # Karşılaştırma grafiği için yeni bir figure
         plt.figure(figsize=(10, 6))
-
-        # Doğruluk değerlerini al
         accuracies = {name: result['accuracy'] for name, result in results.items()}
-
-        # Bar plot çiz
         bars = plt.bar(accuracies.keys(), accuracies.values())
         plt.title('Model Doğruluk Karşılaştırması')
         plt.xlabel('Model')
         plt.ylabel('Doğruluk')
 
-        # Bar değerlerini yaz
         for bar in bars:
             height = bar.get_height()
             plt.text(bar.get_x() + bar.get_width() / 2., height,
@@ -297,16 +314,12 @@ class SARImageClassifier:
 
         plt.tight_layout()
         plt.show()
-        plt.close()
 
 
 def main():
     classifier = SARImageClassifier()
     X, y = classifier.load_and_preprocess('Turkey')
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    results = classifier.train_and_evaluate(X_train, X_test, y_train, y_test)
+    results = classifier.train_and_evaluate(X, y)
     class_names = ['Düşük', 'Orta', 'Yüksek']
     classifier.visualize_results(results, class_names)
 
